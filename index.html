@@ -12,19 +12,28 @@
           apiKey: '',
           model: 'gemini-2.5-flash-image',
           aspectRatio: '1:1',
+          atmosphere: 'light',
+          environment: 'indoor',
           systemPrompt:
-            'You are a professional product photographer and retoucher. Transform the uploaded image into a premium studio product photo. Use a clean studio setup, soft diffused lighting, realistic shadows, high detail, accurate colors. Keep the same product and proportions. Center the product. Remove clutter. No text, no watermark. Output a photorealistic product photography result.',
-          userPrompt: 'Make it look like a studio product photo.',
+            'You are a professional product photographer and retoucher. Transform the uploaded image into a premium product photo. Keep the same product and proportions. Center the product. Remove clutter. Use soft, realistic lighting and shadows. High detail, accurate colors. No text, no watermark.',
           isLoading: false,
           error: '',
           uploadedImageData: null,
           uploadedPreviewUrl: '',
-          outputImageUrl: '',
+          outputs: [],
           outputText: '',
           rawResponse: null,
 
           init() {
             return;
+          },
+
+          setAtmosphere(value) {
+            this.atmosphere = value;
+          },
+
+          setEnvironment(value) {
+            this.environment = value;
           },
 
           async callGemini({ model, payload }) {
@@ -61,7 +70,7 @@
 
           clearOutput() {
             this.error = '';
-            this.outputImageUrl = '';
+            this.outputs = [];
             this.outputText = '';
             this.rawResponse = null;
           },
@@ -107,52 +116,105 @@
             this.isLoading = true;
 
             try {
-              const payload = {
-                contents: [
-                  {
-                    parts: [
-                      { text: this.userPrompt || 'Transform this image into a studio product photo.' },
-                      {
-                        inlineData: {
-                          mimeType: this.uploadedImageData.mimeType,
-                          data: this.uploadedImageData.base64,
+              const basePrompt = `Transform this product image into a premium product photo. Atmosphere: ${this.atmosphere}. Environment: ${this.environment}. Keep the product identical and photorealistic. Clean composition. Realistic shadows. No text, no watermark.`;
+
+              const themes = [
+                {
+                  id: 'studio',
+                  title: 'Studio Clean',
+                  prompt: `${basePrompt} Theme: clean studio background, seamless sweep, soft diffused lighting, subtle reflective surface.`,
+                },
+                {
+                  id: 'shadow',
+                  title: 'Dramatic Shadow',
+                  prompt: `${basePrompt} Theme: cinematic lighting with a strong but realistic shadow shape, premium editorial style.`,
+                },
+                {
+                  id: 'bokeh',
+                  title: 'Soft Bokeh',
+                  prompt: `${basePrompt} Theme: tasteful bokeh background with depth-of-field, product stays razor sharp.`,
+                },
+                {
+                  id: 'hero',
+                  title: 'Hero Shot',
+                  prompt: `${basePrompt} Theme: hero product composition, dynamic premium look, subtle particles/props that match the product but do not cover it.`,
+                },
+              ];
+
+              this.outputs = themes.map((t) => ({
+                id: t.id,
+                title: t.title,
+                isLoading: true,
+                imageUrl: '',
+                error: '',
+              }));
+
+              const tasks = themes.map(async (theme) => {
+                const payload = {
+                  contents: [
+                    {
+                      parts: [
+                        { text: theme.prompt },
+                        {
+                          inlineData: {
+                            mimeType: this.uploadedImageData.mimeType,
+                            data: this.uploadedImageData.base64,
+                          },
                         },
-                      },
-                    ],
+                      ],
+                    },
+                  ],
+                  systemInstruction: {
+                    parts: [{ text: this.systemPrompt }],
                   },
-                ],
-                systemInstruction: {
-                  parts: [{ text: this.systemPrompt }],
-                },
-                generationConfig: {
-                  responseModalities: ['IMAGE'],
-                  imageConfig: {
-                    aspectRatio: this.aspectRatio,
+                  generationConfig: {
+                    responseModalities: ['IMAGE'],
+                    imageConfig: {
+                      aspectRatio: this.aspectRatio,
+                    },
                   },
-                },
-              };
+                };
 
-              const data = await this.callGemini({ model: this.model, payload });
-              this.rawResponse = data;
+                const data = await this.callGemini({ model: this.model, payload });
+                const parts = data?.candidates?.[0]?.content?.parts || [];
+                const inlinePart = parts.find((p) => p?.inlineData?.data && p?.inlineData?.mimeType);
+                const textPart = parts.find((p) => typeof p?.text === 'string' && p.text.trim().length > 0);
 
-              const parts = data?.candidates?.[0]?.content?.parts || [];
-              const inlinePart = parts.find((p) => p?.inlineData?.data && p?.inlineData?.mimeType);
-              const textPart = parts.find((p) => typeof p?.text === 'string' && p.text.trim().length > 0);
+                if (!inlinePart) {
+                  if (textPart) {
+                    throw new Error('The model returned text (no image).');
+                  }
+                  throw new Error('No image output returned.');
+                }
 
-              if (inlinePart) {
                 const mimeType = inlinePart.inlineData.mimeType;
                 const b64 = inlinePart.inlineData.data;
-                this.outputImageUrl = `data:${mimeType};base64,${b64}`;
-                return;
-              }
+                return { themeId: theme.id, imageUrl: `data:${mimeType};base64,${b64}` };
+              });
 
-              if (textPart) {
-                this.outputText = textPart.text;
-                this.error = 'The model returned text (no image). Try a different model that supports image generation.';
-                return;
-              }
+              const results = await Promise.allSettled(tasks);
 
-              this.error = 'No output was returned. Try a different model or prompt.';
+              results.forEach((res, idx) => {
+                const theme = themes[idx];
+                const outIndex = this.outputs.findIndex((o) => o.id === theme.id);
+                if (outIndex === -1) return;
+
+                if (res.status === 'fulfilled') {
+                  this.outputs[outIndex] = {
+                    ...this.outputs[outIndex],
+                    isLoading: false,
+                    imageUrl: res.value.imageUrl,
+                    error: '',
+                  };
+                } else {
+                  this.outputs[outIndex] = {
+                    ...this.outputs[outIndex],
+                    isLoading: false,
+                    imageUrl: '',
+                    error: res.reason instanceof Error ? res.reason.message : String(res.reason),
+                  };
+                }
+              });
             } catch (err) {
               this.error = err instanceof Error ? err.message : String(err);
             } finally {
@@ -164,122 +226,176 @@
     </script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   </head>
-  <body class="min-h-screen bg-white text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
-    <main
-      class="mx-auto mt-12 max-w-2xl rounded-xl border border-slate-200 p-6 shadow-sm dark:border-slate-800"
-      x-data="imageStudioApp()"
-      x-init="init()"
-    >
-      <div class="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 class="text-2xl font-semibold tracking-tight">Studio Product Photo Generator</h1>
-          <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
-            Upload an image and generate a studio product photography style result.
-          </p>
-        </div>
-      </div>
-
-      <div class="mt-6 grid gap-6">
-        <div class="grid gap-2">
-          <label class="text-sm font-medium">Aspect ratio</label>
-          <select
-            class="rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
-            x-model="aspectRatio"
-          >
-            <option value="1:1">1:1</option>
-            <option value="4:5">4:5</option>
-            <option value="3:4">3:4</option>
-            <option value="16:9">16:9</option>
-            <option value="9:16">9:16</option>
-          </select>
-        </div>
-
-        <div class="grid gap-2">
-          <label class="text-sm font-medium">System prompt</label>
-          <textarea
-            class="min-h-[120px] rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
-            x-model="systemPrompt"
-          ></textarea>
-        </div>
-
-        <div class="grid gap-2">
-          <label class="text-sm font-medium">Instruction</label>
-          <textarea
-            class="min-h-[72px] rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
-            x-model="userPrompt"
-          ></textarea>
-        </div>
-
-        <div class="grid gap-2">
-          <label class="text-sm font-medium">Upload image</label>
-          <input
-            type="file"
-            accept="image/*"
-            class="block w-full text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-slate-700 dark:file:bg-slate-100 dark:file:text-slate-900 dark:hover:file:bg-slate-200"
-            @change="onFileChange($event)"
-          />
-        </div>
-
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div class="grid gap-2">
-            <div class="text-sm font-medium">Input</div>
-            <div class="flex min-h-[280px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-900">
-              <template x-if="uploadedPreviewUrl">
-                <img :src="uploadedPreviewUrl" class="max-h-[360px] w-full object-contain" alt="Uploaded" />
-              </template>
-              <template x-if="!uploadedPreviewUrl">
-                <div class="text-center text-sm text-slate-500 dark:text-slate-400">No image selected.</div>
-              </template>
-            </div>
-          </div>
-
-          <div class="grid gap-2">
-            <div class="text-sm font-medium">Output</div>
-            <div class="flex min-h-[280px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-900">
-              <template x-if="outputImageUrl">
-                <img :src="outputImageUrl" class="max-h-[360px] w-full object-contain" alt="Result" />
-              </template>
-              <template x-if="!outputImageUrl">
-                <div class="text-center text-sm text-slate-500 dark:text-slate-400">Generated image will appear here.</div>
-              </template>
-            </div>
+  <body class="min-h-screen bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100" x-data="imageStudioApp()" x-init="init()">
+    <div class="min-h-screen md:flex">
+      <header class="sticky top-0 z-10 border-b border-slate-200 bg-white/90 px-4 py-4 backdrop-blur md:hidden dark:border-slate-800 dark:bg-slate-950/80">
+        <div class="mx-auto flex max-w-5xl items-center justify-between">
+          <div>
+            <div class="text-sm font-semibold tracking-tight">Solo Studio</div>
+            <div class="text-xs text-slate-600 dark:text-slate-300">AI Basic Product Photo</div>
           </div>
         </div>
+      </header>
 
-        <div class="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
-            @click="generate()"
-            :disabled="isLoading || !canGenerate"
-          >
-            <span x-show="!isLoading">Generate</span>
-            <span x-show="isLoading">Generating...</span>
-          </button>
-
-          <a
-            class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900"
-            x-show="outputImageUrl"
-            :href="outputImageUrl"
-            download="studio-result.png"
-            >Download</a
-          >
+      <aside class="hidden md:fixed md:inset-y-0 md:left-0 md:z-20 md:flex md:w-64 md:flex-col md:border-r md:border-slate-200 md:bg-white md:px-4 md:py-6 dark:md:border-slate-800 dark:md:bg-slate-950">
+        <div class="flex items-center gap-2 px-2">
+          <div class="text-lg font-semibold tracking-tight">Solo Studio</div>
         </div>
 
-        <div
-          x-show="error"
-          class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900/40 dark:bg-red-950/40 dark:text-red-200"
-        >
-          <div x-text="error"></div>
-        </div>
+        <nav class="mt-6 flex flex-col gap-1">
+          <div class="rounded-lg bg-slate-900 px-3 py-2 text-left text-sm font-medium text-white dark:bg-slate-100 dark:text-slate-900">
+            AI Basic Product Photo
+          </div>
+        </nav>
+      </aside>
 
-        <div
-          x-show="outputText"
-          class="rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
-        >
-          <pre class="whitespace-pre-wrap" x-text="outputText"></pre>
+      <main class="flex-1 md:pl-64">
+        <div class="mx-auto w-full max-w-5xl px-4 py-6 md:px-6 md:py-10">
+          <section class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-950">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h1 class="text-2xl font-semibold tracking-tight">AI Basic Product Photo</h1>
+                <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                  Upload a product photo and generate a premium product photography result.
+                </p>
+              </div>
+            </div>
+
+            <div class="mt-6 grid gap-6">
+              <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div class="grid gap-2">
+                  <label class="text-sm font-medium">Ratio</label>
+                  <select
+                    class="rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
+                    x-model="aspectRatio"
+                  >
+                    <option value="1:1">1:1</option>
+                    <option value="4:5">4:5</option>
+                    <option value="3:4">3:4</option>
+                    <option value="16:9">16:9</option>
+                    <option value="9:16">9:16</option>
+                  </select>
+                </div>
+
+                <div class="grid gap-2">
+                  <div class="text-sm font-medium">Atmosphere</div>
+                  <div class="flex gap-2">
+                    <button
+                      type="button"
+                      class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium dark:border-slate-700"
+                      :class="atmosphere === 'light' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'hover:bg-slate-50 dark:hover:bg-slate-900'"
+                      @click="setAtmosphere('light')"
+                    >
+                      Light
+                    </button>
+                    <button
+                      type="button"
+                      class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium dark:border-slate-700"
+                      :class="atmosphere === 'dark' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'hover:bg-slate-50 dark:hover:bg-slate-900'"
+                      @click="setAtmosphere('dark')"
+                    >
+                      Dark
+                    </button>
+                  </div>
+                </div>
+
+                <div class="grid gap-2">
+                  <div class="text-sm font-medium">Environment</div>
+                  <div class="flex gap-2">
+                    <button
+                      type="button"
+                      class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium dark:border-slate-700"
+                      :class="environment === 'indoor' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'hover:bg-slate-50 dark:hover:bg-slate-900'"
+                      @click="setEnvironment('indoor')"
+                    >
+                      Indoor
+                    </button>
+                    <button
+                      type="button"
+                      class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium dark:border-slate-700"
+                      :class="environment === 'outdoor' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'hover:bg-slate-50 dark:hover:bg-slate-900'"
+                      @click="setEnvironment('outdoor')"
+                    >
+                      Outdoor
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid gap-2">
+                <label class="text-sm font-medium">Upload   </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  class="block w-full cursor-pointer text-sm file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-slate-700 dark:file:bg-slate-100 dark:file:text-slate-900 dark:hover:file:bg-slate-200"
+                  @change="onFileChange($event)"
+                />
+              </div>
+
+              <div class="grid grid-cols-1 gap-4">
+                <div class="grid gap-2">
+                  <div class="text-sm font-medium">Input</div>
+                  <div class="flex min-h-[280px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-900">
+                    <template x-if="uploadedPreviewUrl">
+                      <img :src="uploadedPreviewUrl" class="max-h-[360px] w-full object-contain" alt="Uploaded" />
+                    </template>
+                    <template x-if="!uploadedPreviewUrl">
+                      <div class="text-center text-sm text-slate-500 dark:text-slate-400">No image selected.</div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+                  @click="generate()"
+                  :disabled="isLoading || !canGenerate"
+                >
+                  <span x-show="!isLoading">Generate</span>
+                  <span x-show="isLoading">Generating...</span>
+                </button>
+
+                <button
+                  type="button"
+                  class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-900"
+                  @click="clearOutput()"
+                  :disabled="isLoading"
+                >
+                  Clear
+                </button>
+              </div>
+
+              <div x-show="isLoading || outputs.length > 0" class="grid gap-2">
+                <div class="text-sm font-medium">Results</div>
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <template x-for="item in outputs" :key="item.id">
+                    <div class="flex aspect-square items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-900">
+                      <template x-if="item.isLoading">
+                        <div class="text-center text-xs text-slate-500 dark:text-slate-400">Generating...</div>
+                      </template>
+                      <template x-if="!item.isLoading && item.imageUrl">
+                        <img :src="item.imageUrl" class="h-full w-full object-contain" alt="Result" />
+                      </template>
+                      <template x-if="!item.isLoading && !item.imageUrl">
+                        <div class="p-2 text-center text-xs text-red-600" x-text="item.error || 'Failed to generate.'"></div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <div
+                x-show="error"
+                class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900/40 dark:bg-red-950/40 dark:text-red-200"
+              >
+                <div x-text="error"></div>
+              </div>
+            </div>
+          </section>
         </div>
-      </div>
-    </main>
+      </main>
+    </div>
   </body>
 </html>
