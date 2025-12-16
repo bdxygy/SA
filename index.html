@@ -3,17 +3,158 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SoloApp</title>
+    <title>SoloApp - Studio Generator</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
     <script>
-      function soloApp() {
+      function imageStudioApp() {
         return {
-          count: 0,
-          name: '',
-          get displayName() {
-            const trimmed = _.trim(this.name);
-            return trimmed ? _.startCase(trimmed) : 'Anonymous!!';
+          apiKey: '',
+          showKey: false,
+          model: 'gemini-2.5-flash-preview-05-20',
+          systemPrompt:
+            'You are a professional product photographer and retoucher. Transform the uploaded image into a premium studio product photo. Use a clean studio setup, soft diffused lighting, realistic shadows, high detail, accurate colors. Keep the same product and proportions. Center the product. Remove clutter. No text, no watermark. Output a photorealistic product photography result.',
+          userPrompt: 'Make it look like a studio product photo.',
+          isLoading: false,
+          error: '',
+          uploadedImageData: null,
+          uploadedPreviewUrl: '',
+          outputImageUrl: '',
+          outputText: '',
+          rawResponse: null,
+
+          init() {
+            try {
+              const savedKey = localStorage.getItem('gemini_api_key');
+              if (savedKey) this.apiKey = savedKey;
+            } catch {
+              this.apiKey = this.apiKey;
+            }
+          },
+
+          saveApiKey() {
+            try {
+              localStorage.setItem('gemini_api_key', this.apiKey || '');
+            } catch {
+              return;
+            }
+          },
+
+          toggleShowKey() {
+            this.showKey = !this.showKey;
+          },
+
+          get canGenerate() {
+            return Boolean(this.apiKey) && Boolean(this.uploadedImageData);
+          },
+
+          clearOutput() {
+            this.error = '';
+            this.outputImageUrl = '';
+            this.outputText = '';
+            this.rawResponse = null;
+          },
+
+          onFileChange(ev) {
+            const file = ev?.target?.files?.[0];
+            if (!file) return;
+
+            if (this.uploadedPreviewUrl) {
+              try {
+                URL.revokeObjectURL(this.uploadedPreviewUrl);
+              } catch {
+                return;
+              }
+            }
+
+            this.clearOutput();
+            this.uploadedPreviewUrl = URL.createObjectURL(file);
+
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = String(reader.result || '');
+              const base64 = result.includes(',') ? result.split(',')[1] : '';
+              this.uploadedImageData = {
+                mimeType: file.type || 'image/png',
+                base64,
+              };
+            };
+            reader.onerror = () => {
+              this.uploadedImageData = null;
+              this.error = 'Failed to read the uploaded image.';
+            };
+            reader.readAsDataURL(file);
+          },
+
+          async generate() {
+            if (!this.canGenerate) {
+              this.error = 'Please provide an API key and upload an image first.';
+              return;
+            }
+
+            this.clearOutput();
+            this.isLoading = true;
+
+            try {
+              const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
+
+              const payload = {
+                contents: [
+                  {
+                    parts: [
+                      { text: this.userPrompt || 'Transform this image into a studio product photo.' },
+                      {
+                        inlineData: {
+                          mimeType: this.uploadedImageData.mimeType,
+                          data: this.uploadedImageData.base64,
+                        },
+                      },
+                    ],
+                  },
+                ],
+                systemInstruction: {
+                  parts: [{ text: this.systemPrompt }],
+                },
+              };
+
+              const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+              });
+
+              const data = await response.json();
+              this.rawResponse = data;
+
+              if (!response.ok) {
+                const message = data?.error?.message || `HTTP error! status: ${response.status}`;
+                throw new Error(message);
+              }
+
+              const parts = data?.candidates?.[0]?.content?.parts || [];
+              const inlinePart = parts.find((p) => p?.inlineData?.data && p?.inlineData?.mimeType);
+              const textPart = parts.find((p) => typeof p?.text === 'string' && p.text.trim().length > 0);
+
+              if (inlinePart) {
+                const mimeType = inlinePart.inlineData.mimeType;
+                const b64 = inlinePart.inlineData.data;
+                this.outputImageUrl = `data:${mimeType};base64,${b64}`;
+                return;
+              }
+
+              if (textPart) {
+                this.outputText = textPart.text;
+                this.error = 'The model returned text (no image). Try a different model that supports image generation.';
+                return;
+              }
+
+              this.error = 'No output was returned. Try a different model or prompt.';
+            } catch (err) {
+              this.error = err instanceof Error ? err.message : String(err);
+            } finally {
+              this.isLoading = false;
+            }
           },
         };
       }
@@ -23,44 +164,135 @@
   <body class="min-h-screen bg-white text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
     <main
       class="mx-auto mt-12 max-w-2xl rounded-xl border border-slate-200 p-6 shadow-sm dark:border-slate-800"
-      x-data="soloApp()"
+      x-data="imageStudioApp()"
+      x-init="init()"
     >
-      <h1 class="text-2xl font-semibold tracking-tight">SoloApp (Alpine)</h1>
-      <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
-        Edit
-        <code class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[0.875em] dark:bg-slate-900">index.html</code>
-        and start building.
-      </p>
-
-      <div class="mt-6 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-slate-50 active:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-900 dark:active:bg-slate-800"
-          @click="count++"
-        >
-          +
-        </button>
-        <button
-          type="button"
-          class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-slate-50 active:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-900 dark:active:bg-slate-800"
-          @click="count--"
-        >
-          -
-        </button>
-        <span class="text-sm">Count: <strong class="font-semibold" x-text="count"></strong></span>
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight">Studio Product Photo Generator</h1>
+          <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
+            Upload an image and generate a studio product photography style result.
+          </p>
+        </div>
       </div>
 
-      <hr class="my-6 border-slate-200 dark:border-slate-800" />
+      <div class="mt-6 grid gap-6">
+        <div class="grid gap-2">
+          <label class="text-sm font-medium">Gemini API Key</label>
+          <div class="flex flex-wrap gap-2">
+            <input
+              class="min-w-[260px] flex-1 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
+              placeholder="Paste your API key"
+              :type="showKey ? 'text' : 'password'"
+              x-model.trim="apiKey"
+              @input="saveApiKey()"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button
+              type="button"
+              class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-slate-50 active:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-900 dark:active:bg-slate-800"
+              @click="toggleShowKey()"
+              x-text="showKey ? 'Hide' : 'Show'"
+            ></button>
+          </div>
+        </div>
 
-      <div class="flex flex-wrap items-center gap-3">
-        <input
-          type="text"
-          class="w-64 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:placeholder:text-slate-500 dark:focus:border-slate-500 dark:focus:ring-slate-800"
-          placeholder="Your name"
-          x-model="name"
-          aria-label="Your name"
-        />
-        <span class="text-sm">Hello, <strong class="font-semibold" x-text="displayName"></strong></span>
+        <div class="grid gap-2">
+          <label class="text-sm font-medium">Model</label>
+          <input
+            class="rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
+            placeholder="e.g. gemini-2.5-flash-preview-05-20"
+            x-model.trim="model"
+            spellcheck="false"
+          />
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-sm font-medium">System prompt</label>
+          <textarea
+            class="min-h-[120px] rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
+            x-model="systemPrompt"
+          ></textarea>
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-sm font-medium">Instruction</label>
+          <textarea
+            class="min-h-[72px] rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
+            x-model="userPrompt"
+          ></textarea>
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-sm font-medium">Upload image</label>
+          <input
+            type="file"
+            accept="image/*"
+            class="block w-full text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-slate-700 dark:file:bg-slate-100 dark:file:text-slate-900 dark:hover:file:bg-slate-200"
+            @change="onFileChange($event)"
+          />
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div class="grid gap-2">
+            <div class="text-sm font-medium">Input</div>
+            <div class="flex min-h-[280px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-900">
+              <template x-if="uploadedPreviewUrl">
+                <img :src="uploadedPreviewUrl" class="max-h-[360px] w-full object-contain" alt="Uploaded" />
+              </template>
+              <template x-if="!uploadedPreviewUrl">
+                <div class="text-center text-sm text-slate-500 dark:text-slate-400">No image selected.</div>
+              </template>
+            </div>
+          </div>
+
+          <div class="grid gap-2">
+            <div class="text-sm font-medium">Output</div>
+            <div class="flex min-h-[280px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-900">
+              <template x-if="outputImageUrl">
+                <img :src="outputImageUrl" class="max-h-[360px] w-full object-contain" alt="Result" />
+              </template>
+              <template x-if="!outputImageUrl">
+                <div class="text-center text-sm text-slate-500 dark:text-slate-400">Generated image will appear here.</div>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+            @click="generate()"
+            :disabled="isLoading || !canGenerate"
+          >
+            <span x-show="!isLoading">Generate</span>
+            <span x-show="isLoading">Generating...</span>
+          </button>
+
+          <a
+            class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-900"
+            x-show="outputImageUrl"
+            :href="outputImageUrl"
+            download="studio-result.png"
+            >Download</a
+          >
+        </div>
+
+        <div
+          x-show="error"
+          class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900/40 dark:bg-red-950/40 dark:text-red-200"
+        >
+          <div x-text="error"></div>
+        </div>
+
+        <div
+          x-show="outputText"
+          class="rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+        >
+          <pre class="whitespace-pre-wrap" x-text="outputText"></pre>
+        </div>
       </div>
     </main>
   </body>
