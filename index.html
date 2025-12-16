@@ -10,7 +10,6 @@
       function imageStudioApp() {
         return {
           apiKey: '',
-          showKey: false,
           model: 'gemini-2.5-flash-image',
           aspectRatio: '1:1',
           systemPrompt:
@@ -29,13 +28,8 @@
           },
 
           async callGemini({ model, payload }) {
-            if (!this.apiKey) {
-              throw new Error('Missing API key.');
-            }
-
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
-              this.apiKey,
-            )}`;
+            const keyQuery = this.apiKey ? `?key=${encodeURIComponent(this.apiKey)}` : '';
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent${keyQuery}`;
 
             const response = await fetch(apiUrl, {
               method: 'POST',
@@ -61,12 +55,8 @@
             return data;
           },
 
-          toggleShowKey() {
-            this.showKey = !this.showKey;
-          },
-
           get canGenerate() {
-            return Boolean(this.apiKey) && Boolean(this.uploadedImageData);
+            return Boolean(this.uploadedImageData);
           },
 
           clearOutput() {
@@ -109,7 +99,7 @@
 
           async generate() {
             if (!this.canGenerate) {
-              this.error = 'Please provide an API key and upload an image first.';
+              this.error = 'Please upload an image first.';
               return;
             }
 
@@ -190,39 +180,6 @@
       </div>
 
       <div class="mt-6 grid gap-6">
-        <div class="grid gap-2">
-          <label class="text-sm font-medium">Gemini API Key</label>
-          <div class="flex flex-wrap gap-2">
-            <input
-              class="min-w-[260px] flex-1 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
-              placeholder="Paste your API key"
-              :type="showKey ? 'text' : 'password'"
-              x-model.trim="apiKey"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            <button
-              type="button"
-              class="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-slate-50 active:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-900 dark:active:bg-slate-800"
-              @click="toggleShowKey()"
-              x-text="showKey ? 'Hide' : 'Show'"
-            ></button>
-          </div>
-          <div class="text-xs text-slate-500 dark:text-slate-400">
-            API key is kept in memory (not stored).
-          </div>
-        </div>
-
-        <div class="grid gap-2">
-          <label class="text-sm font-medium">Model</label>
-          <input
-            class="rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
-            placeholder="e.g. gemini-2.5-flash-image or gemini-3-pro-image-preview"
-            x-model.trim="model"
-            spellcheck="false"
-          />
-        </div>
-
         <div class="grid gap-2">
           <label class="text-sm font-medium">Aspect ratio</label>
           <select
