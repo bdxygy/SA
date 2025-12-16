@@ -120,24 +120,54 @@
 
               const themes = [
                 {
-                  id: 'studio',
+                  id: 'studio_clean',
                   title: 'Studio Clean',
-                  prompt: `${basePrompt} Theme: clean studio background, seamless sweep, soft diffused lighting, subtle reflective surface.`,
+                  prompt: `${basePrompt} Theme: clean studio backdrop with a seamless sweep, soft diffused key light, subtle floor reflection, premium catalog style.`,
                 },
                 {
-                  id: 'shadow',
-                  title: 'Dramatic Shadow',
-                  prompt: `${basePrompt} Theme: cinematic lighting with a strong but realistic shadow shape, premium editorial style.`,
+                  id: 'moody_spotlight',
+                  title: 'Moody Spotlight',
+                  prompt: `${basePrompt} Theme: single soft spotlight with controlled falloff, deep but natural shadows, high-end editorial mood, no heavy vignette.`,
                 },
                 {
-                  id: 'bokeh',
+                  id: 'soft_bokeh',
                   title: 'Soft Bokeh',
-                  prompt: `${basePrompt} Theme: tasteful bokeh background with depth-of-field, product stays razor sharp.`,
+                  prompt: `${basePrompt} Theme: gentle bokeh lights in the background, shallow depth-of-field, product remains razor sharp with realistic edge detail.`,
                 },
                 {
-                  id: 'hero',
-                  title: 'Hero Shot',
-                  prompt: `${basePrompt} Theme: hero product composition, dynamic premium look, subtle particles/props that match the product but do not cover it.`,
+                  id: 'hero_angle',
+                  title: 'Hero Angle',
+                  prompt: `${basePrompt} Theme: bold hero framing with a slightly low angle, premium energy, subtle complementary props near the edges only, nothing covering the product.`,
+                },
+                {
+                  id: 'color_splash',
+                  title: 'Color Splash',
+                  prompt: `${basePrompt} Theme: dynamic product-action splash moment (realistic liquid or fine particles splashing around the product as if captured mid-motion), high-speed flash look, crisp droplets, keep the product fully visible and sharp, no messy paint on the product, no labels added.`,
+                },
+                {
+                  id: 'neon_glow',
+                  title: 'Neon Glow',
+                  prompt: `${basePrompt} Theme: modern neon rim-light accents, subtle gradient backdrop, glossy highlights that still look realistic, premium nightlife vibe, no signs, no typography.`,
+                },
+                {
+                  id: 'paper_cut',
+                  title: 'Paper Cut Pop',
+                  prompt: `${basePrompt} Theme: playful layered paper-cut shapes as a background set, soft shadows between layers, bright but tasteful colors, product remains photorealistic and untouched.`,
+                },
+                {
+                  id: 'liquid_glass',
+                  title: 'Liquid Glass',
+                  prompt: `${basePrompt} Theme: translucent glassy shapes and refracted light in the background, subtle caustics, sleek tech aesthetic, keep the product surface and label-free realism.`,
+                },
+                {
+                  id: 'confetti_burst',
+                  title: 'Confetti Burst',
+                  prompt: `${basePrompt} Theme: celebratory confetti burst around the background perimeter (not covering the product), crisp lighting, high shutter look, fun but still premium.`,
+                },
+                {
+                  id: 'texture_macro',
+                  title: 'Texture Macro',
+                  prompt: `${basePrompt} Theme: macro-inspired detail emphasis, clean textured surface (e.g., fine stone, linen, or matte clay), controlled highlights, ultra-sharp edges, no distortion.`,
                 },
               ];
 
@@ -369,7 +399,7 @@
 
               <div x-show="isLoading || outputs.length > 0" class="grid gap-2">
                 <div class="text-sm font-medium">Results</div>
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <template x-for="item in outputs" :key="item.id">
                     <div class="flex aspect-square items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-900">
                       <template x-if="item.isLoading">
