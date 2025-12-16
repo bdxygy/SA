@@ -23,3 +23,5 @@ pnpm-debug.log*
 
 # Misc
 *.swp
+
+_docs
