@@ -4,70 +4,201 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SoloApp - Studio Generator</title>
+    <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Lodash utility library -->
     <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
     <script>
+      /**
+       * Converts a base64 encoded string to an ArrayBuffer.
+       * Utility function for handling binary data.
+       * @param {string} base64 - The base64 string without the data URI prefix.
+       * @returns {ArrayBuffer}
+       */
+      function base64ToArrayBuffer(base64) {
+        const binaryString = atob(base64);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+      }
+
+      /**
+       * Simple WAV header writer for PCM 16-bit audio.
+       * @param {Int16Array} pcm16 - The raw PCM audio data.
+       * @param {number} sampleRate - The sample rate of the audio.
+       * @returns {Blob} - A Blob containing the WAV file data.
+       */
+      function pcmToWav(pcm16, sampleRate) {
+        const numChannels = 1;
+        const bitsPerSample = 16;
+        const bytesPerSample = bitsPerSample / 8;
+        const blockAlign = numChannels * bytesPerSample;
+        const byteRate = sampleRate * blockAlign;
+        const dataSize = pcm16.length * bytesPerSample;
+        const buffer = new ArrayBuffer(44 + dataSize);
+        const view = new DataView(buffer);
+        let offset = 0;
+
+        /** Writes a string to the DataView at the current offset */
+        function writeString(s) {
+          for (let i = 0; i < s.length; i++) {
+            view.setUint8(offset + i, s.charCodeAt(i));
+          }
+          offset += s.length;
+        }
+
+        /** Writes a 32-bit integer to the DataView */
+        function writeUint32(i) {
+          view.setUint32(offset, i, true);
+          offset += 4;
+        }
+
+        /** Writes a 16-bit integer to the DataView */
+        function writeUint16(i) {
+          view.setUint16(offset, i, true);
+          offset += 2;
+        }
+
+        // RIFF chunk
+        writeString('RIFF');
+        writeUint32(36 + dataSize); // ChunkSize
+        writeString('WAVE');
+
+        // FMT chunk
+        writeString('fmt ');
+        writeUint32(16); // Subchunk1Size (16 for PCM)
+        writeUint16(1); // AudioFormat (1 for PCM)
+        writeUint16(numChannels); // NumChannels
+        writeUint32(sampleRate); // SampleRate
+        writeUint32(byteRate); // ByteRate
+        writeUint16(blockAlign); // BlockAlign
+        writeUint16(bitsPerSample); // BitsPerSample
+
+        // DATA chunk
+        writeString('data');
+        writeUint32(dataSize); // Subchunk2Size
+
+        // Write PCM data
+        const pcmBytes = new Uint8Array(buffer, offset);
+        const pcmView = new DataView(pcm16.buffer);
+        for (let i = 0; i < dataSize; i++) {
+          pcmBytes[i] = pcmView.getUint8(i);
+        }
+
+        return new Blob([buffer], { type: 'audio/wav' });
+      }
+
+      /**
+       * Main application logic for the Image Studio.
+       * Uses Alpine.js for reactivity.
+       */
       function imageStudioApp() {
         return {
-          apiKey: '',
-          model: 'gemini-2.5-flash-image',
+          // Configuration
+          apiKey: '', // API Key is typically handled by the Canvas environment, leave empty.
+          // Using gemini-2.5-flash-image-preview for image-to-image/editing tasks.
+          model: 'gemini-2.5-flash-image-preview',
           aspectRatio: '1:1',
           atmosphere: 'light',
           environment: 'indoor',
           systemPrompt:
             'You are a professional product photographer and retoucher. Transform the uploaded image into a premium product photo. Keep the same product and proportions. Center the product. Remove clutter. Use soft, realistic lighting and shadows. High detail, accurate colors. No text, no watermark.',
+          
+          // State
           isLoading: false,
           error: '',
-          uploadedImageData: null,
-          uploadedPreviewUrl: '',
-          outputs: [],
+          uploadedImageData: null, // Stores { mimeType, base64 } of the uploaded image
+          uploadedPreviewUrl: '', // URL.createObjectURL for display
+          outputs: [], // Array of generated image objects: { id, title, isLoading, imageUrl, error }
+          
+          // The outputText and rawResponse variables from the original file are unused 
+          // for this image generation app, but kept for completeness in the file content.
           outputText: '',
           rawResponse: null,
 
+          /** Initializes the application state. */
           init() {
-            return;
+            // Optional: Can be used to load saved state or perform initial authentication
+            console.log('Image Studio App initialized.');
           },
 
+          /** Sets the chosen atmosphere (light/dark). */
           setAtmosphere(value) {
             this.atmosphere = value;
           },
 
+          /** Sets the chosen environment (indoor/outdoor). */
           setEnvironment(value) {
             this.environment = value;
           },
 
-          async callGemini({ model, payload }) {
-            const keyQuery = this.apiKey ? `?key=${encodeURIComponent(this.apiKey)}` : '';
+          /**
+           * Calls the Gemini API for image-to-image generation.
+           * Implements exponential backoff for retries.
+           * @param {object} args - Arguments including model and payload.
+           * @param {string} args.model - The model name.
+           * @param {object} args.payload - The API payload.
+           * @param {number} [retryCount=0] - Current retry attempt count.
+           * @returns {Promise<object>} - The JSON response data.
+           */
+          async callGemini({ model, payload }, retryCount = 0) {
+            const maxRetries = 5;
+            const delay = Math.pow(2, retryCount) * 1000 + Math.random() * 1000; // Exponential backoff with jitter
+
+            const apiKey = this.apiKey;
+            const keyQuery = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
+            // Use the gemini-2.5-flash-image-preview model for image generation
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent${keyQuery}`;
 
-            const response = await fetch(apiUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify(payload),
-            });
-
-            let data;
             try {
-              data = await response.json();
-            } catch {
-              const text = await response.text();
-              throw new Error(text || `HTTP error! status: ${response.status}`);
-            }
+              const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+              });
 
-            if (!response.ok) {
-              const message = data?.error?.message || `HTTP error! status: ${response.status}`;
-              throw new Error(message);
-            }
+              let data;
+              try {
+                data = await response.json();
+              } catch {
+                // Handle non-JSON response (e.g., plain text error)
+                const text = await response.text();
+                throw new Error(text || `HTTP error! status: ${response.status}`);
+              }
 
-            return data;
+              if (response.status === 429 && retryCount < maxRetries) {
+                // Rate limit error, retry after delay
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return this.callGemini({ model, payload }, retryCount + 1);
+              }
+
+              if (!response.ok) {
+                const message = data?.error?.message || `HTTP error! status: ${response.status}`;
+                throw new Error(message);
+              }
+
+              return data;
+            } catch (error) {
+              if (retryCount < maxRetries) {
+                // Retry for network errors or other transient issues
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return this.callGemini({ model, payload }, retryCount + 1);
+              }
+              throw error; // Throw if max retries reached
+            }
           },
 
+          /** Checks if generation is possible. */
           get canGenerate() {
             return Boolean(this.uploadedImageData);
           },
 
+          /** Resets error and output states. */
           clearOutput() {
             this.error = '';
             this.outputs = [];
@@ -75,29 +206,33 @@
             this.rawResponse = null;
           },
 
+          /** Handles file selection and converts it to base64. */
           onFileChange(ev) {
             const file = ev?.target?.files?.[0];
             if (!file) return;
 
+            // Revoke previous URL object to prevent memory leaks
             if (this.uploadedPreviewUrl) {
               try {
                 URL.revokeObjectURL(this.uploadedPreviewUrl);
               } catch {
-                return;
+                // Ignore errors during revocation
               }
             }
 
             this.clearOutput();
-            this.uploadedPreviewUrl = URL.createObjectURL(file);
+            this.uploadedPreviewUrl = URL.createObjectURL(file); // Create preview URL
 
             const reader = new FileReader();
             reader.onload = () => {
               const result = String(reader.result || '');
+              // Extract base64 data part
               const base64 = result.includes(',') ? result.split(',')[1] : '';
               this.uploadedImageData = {
                 mimeType: file.type || 'image/png',
                 base64,
               };
+              console.log('Image loaded and converted to base64.');
             };
             reader.onerror = () => {
               this.uploadedImageData = null;
@@ -106,6 +241,7 @@
             reader.readAsDataURL(file);
           },
 
+          /** Triggers the image generation process for multiple themes. */
           async generate() {
             if (!this.canGenerate) {
               this.error = 'Please upload an image first.';
@@ -116,61 +252,39 @@
             this.isLoading = true;
 
             try {
+              // The base prompt incorporates the user's environment and atmosphere choices
               const basePrompt = `Transform this product image into a premium product photo. Atmosphere: ${this.atmosphere}. Environment: ${this.environment}. Keep the product identical and photorealistic. Clean composition. Realistic shadows. No text, no watermark.`;
 
+              // Define the different stylistic themes to generate
               const themes = [
                 {
-                  id: 'studio_clean',
+                  id: 'studio',
                   title: 'Studio Clean',
-                  prompt: `${basePrompt} Theme: clean studio backdrop with a seamless sweep, soft diffused key light, subtle floor reflection, premium catalog style.`,
+                  prompt: `${basePrompt} Theme: clean studio background, seamless sweep, soft diffused lighting, subtle reflective surface.`,
                 },
                 {
-                  id: 'moody_spotlight',
-                  title: 'Moody Spotlight',
-                  prompt: `${basePrompt} Theme: single soft spotlight with controlled falloff, deep but natural shadows, high-end editorial mood, no heavy vignette.`,
+                  id: 'shadow',
+                  title: 'Dramatic Shadow',
+                  prompt: `${basePrompt} Theme: cinematic lighting with a strong but realistic shadow shape, premium editorial style.`,
                 },
                 {
-                  id: 'soft_bokeh',
+                  id: 'bokeh',
                   title: 'Soft Bokeh',
-                  prompt: `${basePrompt} Theme: gentle bokeh lights in the background, shallow depth-of-field, product remains razor sharp with realistic edge detail.`,
+                  prompt: `${basePrompt} Theme: tasteful bokeh background with depth-of-field, product stays razor sharp.`,
                 },
                 {
-                  id: 'hero_angle',
-                  title: 'Hero Angle',
-                  prompt: `${basePrompt} Theme: bold hero framing with a slightly low angle, premium energy, subtle complementary props near the edges only, nothing covering the product.`,
+                  id: 'hero',
+                  title: 'Hero Shot',
+                  prompt: `${basePrompt} Theme: hero product composition, dynamic premium look, subtle props/elements that match the product but do not cover it.`,
                 },
                 {
-                  id: 'color_splash',
-                  title: 'Color Splash',
-                  prompt: `${basePrompt} Theme: dynamic product-action splash moment (realistic liquid or fine particles splashing around the product as if captured mid-motion), high-speed flash look, crisp droplets, keep the product fully visible and sharp, no messy paint on the product, no labels added.`,
-                },
-                {
-                  id: 'neon_glow',
-                  title: 'Neon Glow',
-                  prompt: `${basePrompt} Theme: modern neon rim-light accents, subtle gradient backdrop, glossy highlights that still look realistic, premium nightlife vibe, no signs, no typography.`,
-                },
-                {
-                  id: 'paper_cut',
-                  title: 'Paper Cut Pop',
-                  prompt: `${basePrompt} Theme: playful layered paper-cut shapes as a background set, soft shadows between layers, bright but tasteful colors, product remains photorealistic and untouched.`,
-                },
-                {
-                  id: 'liquid_glass',
-                  title: 'Liquid Glass',
-                  prompt: `${basePrompt} Theme: translucent glassy shapes and refracted light in the background, subtle caustics, sleek tech aesthetic, keep the product surface and label-free realism.`,
-                },
-                {
-                  id: 'confetti_burst',
-                  title: 'Confetti Burst',
-                  prompt: `${basePrompt} Theme: celebratory confetti burst around the background perimeter (not covering the product), crisp lighting, high shutter look, fun but still premium.`,
-                },
-                {
-                  id: 'texture_macro',
-                  title: 'Texture Macro',
-                  prompt: `${basePrompt} Theme: macro-inspired detail emphasis, clean textured surface (e.g., fine stone, linen, or matte clay), controlled highlights, ultra-sharp edges, no distortion.`,
+                  id: 'splash',
+                  title: 'Splash Action',
+                  prompt: `${basePrompt} Theme: high-speed action product shot with the item suspended in mid-air (strobe/flash freeze look). Build a bold abstract scene that feels relevant to the product category. Surround the product with believable motion elements (droplets, vapor, dust, micro-splatter) that arc around it but never obscure key details. Preserve the exact product shape and design, keep edges tack-sharp, photorealistic lighting, energetic ad-style composition.`,
                 },
               ];
 
+              // Initialize outputs for display with loading state
               this.outputs = themes.map((t) => ({
                 id: t.id,
                 title: t.title,
@@ -179,12 +293,15 @@
                 error: '',
               }));
 
+              // Create a task for each theme to run in parallel
               const tasks = themes.map(async (theme) => {
                 const payload = {
                   contents: [
                     {
                       parts: [
+                        // The user's specific theme prompt
                         { text: theme.prompt },
+                        // The uploaded image data
                         {
                           inlineData: {
                             mimeType: this.uploadedImageData.mimeType,
@@ -194,42 +311,51 @@
                       ],
                     },
                   ],
+                  // System prompt for setting the professional persona
                   systemInstruction: {
                     parts: [{ text: this.systemPrompt }],
                   },
+                  // Configuration for image generation
                   generationConfig: {
                     responseModalities: ['IMAGE'],
                     imageConfig: {
-                      aspectRatio: this.aspectRatio,
+                      aspectRatio: this.aspectRatio, // Use selected aspect ratio
                     },
                   },
                 };
 
                 const data = await this.callGemini({ model: this.model, payload });
                 const parts = data?.candidates?.[0]?.content?.parts || [];
+                
+                // Find the inline image data part
                 const inlinePart = parts.find((p) => p?.inlineData?.data && p?.inlineData?.mimeType);
+                // Find any text part (e.g., if the model failed to generate an image but returned an error message)
                 const textPart = parts.find((p) => typeof p?.text === 'string' && p.text.trim().length > 0);
 
                 if (!inlinePart) {
                   if (textPart) {
-                    throw new Error('The model returned text (no image).');
+                    throw new Error(`Model error: ${textPart.text.substring(0, 100)}...`);
                   }
                   throw new Error('No image output returned.');
                 }
 
                 const mimeType = inlinePart.inlineData.mimeType;
                 const b64 = inlinePart.inlineData.data;
+                // Return data URL for image display
                 return { themeId: theme.id, imageUrl: `data:${mimeType};base64,${b64}` };
               });
 
+              // Wait for all parallel generation tasks to complete (succeed or fail)
               const results = await Promise.allSettled(tasks);
 
+              // Update the outputs state based on the results
               results.forEach((res, idx) => {
                 const theme = themes[idx];
                 const outIndex = this.outputs.findIndex((o) => o.id === theme.id);
                 if (outIndex === -1) return;
 
                 if (res.status === 'fulfilled') {
+                  // Task successful
                   this.outputs[outIndex] = {
                     ...this.outputs[outIndex],
                     isLoading: false,
@@ -237,27 +363,45 @@
                     error: '',
                   };
                 } else {
+                  // Task failed
+                  const errorMessage = res.reason instanceof Error ? res.reason.message : String(res.reason);
                   this.outputs[outIndex] = {
                     ...this.outputs[outIndex],
                     isLoading: false,
                     imageUrl: '',
-                    error: res.reason instanceof Error ? res.reason.message : String(res.reason),
+                    error: errorMessage,
                   };
                 }
               });
             } catch (err) {
+              // Catch high-level errors (e.g., API key, entire request failure)
               this.error = err instanceof Error ? err.message : String(err);
             } finally {
+              // Always stop loading indicator
               this.isLoading = false;
             }
           },
         };
       }
     </script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <!-- Load Alpine.js for declarative reactivity -->
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+      /* Custom utility for dark mode input file styling */
+      .dark .file\:bg-slate-100 {
+        background-color: #f1f5f9; /* slate-100 */
+      }
+      .dark .file\:text-slate-900 {
+        color: #0f172a; /* slate-900 */
+      }
+      .dark .hover\:file\:bg-slate-200:hover {
+        background-color: #e2e8f0; /* slate-200 */
+      }
+    </style>
   </head>
   <body class="min-h-screen bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100" x-data="imageStudioApp()" x-init="init()">
     <div class="min-h-screen md:flex">
+      <!-- Mobile Header -->
       <header class="sticky top-0 z-10 border-b border-slate-200 bg-white/90 px-4 py-4 backdrop-blur md:hidden dark:border-slate-800 dark:bg-slate-950/80">
         <div class="mx-auto flex max-w-5xl items-center justify-between">
           <div>
@@ -267,9 +411,10 @@
         </div>
       </header>
 
+      <!-- Sidebar (Desktop) -->
       <aside class="hidden md:fixed md:inset-y-0 md:left-0 md:z-20 md:flex md:w-64 md:flex-col md:border-r md:border-slate-200 md:bg-white md:px-4 md:py-6 dark:md:border-slate-800 dark:md:bg-slate-950">
         <div class="flex items-center gap-2 px-2">
-          <div class="text-lg font-semibold tracking-tight">Solo Studio</div>
+          <div class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">Solo Studio</div>
         </div>
 
         <nav class="mt-6 flex flex-col gap-1">
@@ -279,49 +424,58 @@
         </nav>
       </aside>
 
+      <!-- Main Content Area -->
       <main class="flex-1 md:pl-64">
         <div class="mx-auto w-full max-w-5xl px-4 py-6 md:px-6 md:py-10">
-          <section class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-950">
+          <section class="rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
             <div class="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h1 class="text-2xl font-semibold tracking-tight">AI Basic Product Photo</h1>
-                <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                  Upload a product photo and generate a premium product photography result.
+                <h1 class="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-slate-50">
+                  AI Product Studio
+                </h1>
+                <p class="mt-2 text-base text-slate-600 dark:text-slate-400">
+                  Upload a product photo and instantly generate four premium product photography results using different styles.
                 </p>
               </div>
             </div>
 
-            <div class="mt-6 grid gap-6">
-              <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <!-- Settings and Input Area -->
+            <div class="mt-8 grid gap-8">
+              <!-- Configuration Options -->
+              <div class="grid grid-cols-1 gap-6 sm:grid-cols-3">
+                
+                <!-- Aspect Ratio Selector -->
                 <div class="grid gap-2">
-                  <label class="text-sm font-medium">Ratio</label>
+                  <label class="text-sm font-medium text-slate-700 dark:text-slate-300" for="ratio-select">Aspect Ratio</label>
                   <select
-                    class="rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
+                    id="ratio-select"
+                    class="rounded-lg border border-slate-300 bg-slate-50/50 px-3 py-2 text-sm outline-none ring-0 transition-colors focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-slate-700 dark:bg-slate-800/50 dark:focus:border-indigo-400 dark:focus:ring-indigo-700"
                     x-model="aspectRatio"
                   >
-                    <option value="1:1">1:1</option>
-                    <option value="4:5">4:5</option>
-                    <option value="3:4">3:4</option>
-                    <option value="16:9">16:9</option>
-                    <option value="9:16">9:16</option>
+                    <option value="1:1">1:1 (Square)</option>
+                    <option value="4:5">4:5 (Portrait, Instagram)</option>
+                    <option value="3:4">3:4 (Portrait)</option>
+                    <option value="16:9">16:9 (Landscape)</option>
+                    <option value="9:16">9:16 (Story/Reel)</option>
                   </select>
                 </div>
 
+                <!-- Atmosphere Selector -->
                 <div class="grid gap-2">
-                  <div class="text-sm font-medium">Atmosphere</div>
+                  <div class="text-sm font-medium text-slate-700 dark:text-slate-300">Atmosphere</div>
                   <div class="flex gap-2">
                     <button
                       type="button"
-                      class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium dark:border-slate-700"
-                      :class="atmosphere === 'light' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'hover:bg-slate-50 dark:hover:bg-slate-900'"
+                      class="flex-1 rounded-xl border-2 px-3 py-2 text-sm font-semibold transition-all duration-200"
+                      :class="atmosphere === 'light' ? 'border-indigo-500 bg-indigo-500 text-white shadow-md shadow-indigo-500/50' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-700/50 dark:text-slate-200 dark:hover:bg-slate-700'"
                       @click="setAtmosphere('light')"
                     >
                       Light
                     </button>
                     <button
                       type="button"
-                      class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium dark:border-slate-700"
-                      :class="atmosphere === 'dark' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'hover:bg-slate-50 dark:hover:bg-slate-900'"
+                      class="flex-1 rounded-xl border-2 px-3 py-2 text-sm font-semibold transition-all duration-200"
+                      :class="atmosphere === 'dark' ? 'border-indigo-500 bg-indigo-500 text-white shadow-md shadow-indigo-500/50' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-700/50 dark:text-slate-200 dark:hover:bg-slate-700'"
                       @click="setAtmosphere('dark')"
                     >
                       Dark
@@ -329,21 +483,22 @@
                   </div>
                 </div>
 
+                <!-- Environment Selector -->
                 <div class="grid gap-2">
-                  <div class="text-sm font-medium">Environment</div>
+                  <div class="text-sm font-medium text-slate-700 dark:text-slate-300">Environment</div>
                   <div class="flex gap-2">
                     <button
                       type="button"
-                      class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium dark:border-slate-700"
-                      :class="environment === 'indoor' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'hover:bg-slate-50 dark:hover:bg-slate-900'"
+                      class="flex-1 rounded-xl border-2 px-3 py-2 text-sm font-semibold transition-all duration-200"
+                      :class="environment === 'indoor' ? 'border-indigo-500 bg-indigo-500 text-white shadow-md shadow-indigo-500/50' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-700/50 dark:text-slate-200 dark:hover:bg-slate-700'"
                       @click="setEnvironment('indoor')"
                     >
                       Indoor
                     </button>
                     <button
                       type="button"
-                      class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium dark:border-slate-700"
-                      :class="environment === 'outdoor' ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' : 'hover:bg-slate-50 dark:hover:bg-slate-900'"
+                      class="flex-1 rounded-xl border-2 px-3 py-2 text-sm font-semibold transition-all duration-200"
+                      :class="environment === 'outdoor' ? 'border-indigo-500 bg-indigo-500 text-white shadow-md shadow-indigo-500/50' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-700/50 dark:text-slate-200 dark:hover:bg-slate-700'"
                       @click="setEnvironment('outdoor')"
                     >
                       Outdoor
@@ -352,76 +507,108 @@
                 </div>
               </div>
 
-              <div class="grid gap-2">
-                <label class="text-sm font-medium">Upload   </label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  class="block w-full cursor-pointer text-sm file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-slate-700 dark:file:bg-slate-100 dark:file:text-slate-900 dark:hover:file:bg-slate-200"
-                  @change="onFileChange($event)"
-                />
-              </div>
-
-              <div class="grid grid-cols-1 gap-4">
+              <!-- File Upload and Input Preview -->
+              <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                <!-- File Upload -->
                 <div class="grid gap-2">
-                  <div class="text-sm font-medium">Input</div>
-                  <div class="flex min-h-[280px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-900">
+                  <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Upload Product Image</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    class="block w-full cursor-pointer text-sm file:mr-4 file:cursor-pointer file:rounded-xl file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-slate-700 dark:file:bg-slate-100 dark:file:text-slate-900 dark:hover:file:bg-slate-200 transition-colors"
+                    @change="onFileChange($event)"
+                  />
+                </div>
+
+                <!-- Input Image Preview -->
+                <div class="grid gap-2 sm:row-span-2">
+                  <div class="text-sm font-medium text-slate-700 dark:text-slate-300">Input Preview</div>
+                  <div class="flex min-h-[300px] aspect-[4/3] sm:aspect-square items-center justify-center overflow-hidden rounded-xl border-2 border-dashed border-slate-300 bg-slate-100 p-4 dark:border-slate-700 dark:bg-slate-950">
                     <template x-if="uploadedPreviewUrl">
-                      <img :src="uploadedPreviewUrl" class="max-h-[360px] w-full object-contain" alt="Uploaded" />
+                      <img :src="uploadedPreviewUrl" class="max-h-[360px] w-full object-contain rounded-lg shadow-xl" alt="Uploaded Product" />
                     </template>
                     <template x-if="!uploadedPreviewUrl">
-                      <div class="text-center text-sm text-slate-500 dark:text-slate-400">No image selected.</div>
+                      <div class="text-center text-sm text-slate-500 dark:text-slate-400 p-4">
+                        <svg class="w-10 h-10 mx-auto mb-2 text-slate-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-1-5a2 2 0 11-4 0 2 2 0 014 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 9h2m-2 4h4m-4 4h4m-4 4h4M4 4h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2z"></path></svg>
+                        <p>Upload an image to get started.</p>
+                      </div>
                     </template>
                   </div>
                 </div>
               </div>
 
-              <div class="flex flex-wrap items-center gap-3">
+              <!-- Actions -->
+              <div class="flex flex-wrap items-center gap-4 border-t border-slate-200 pt-6 dark:border-slate-700">
                 <button
                   type="button"
-                  class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200"
+                  class="rounded-xl bg-indigo-600 px-6 py-3 text-base font-bold text-white shadow-lg shadow-indigo-600/50 hover:bg-indigo-700 transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-indigo-500 dark:shadow-indigo-500/50 dark:hover:bg-indigo-600"
                   @click="generate()"
                   :disabled="isLoading || !canGenerate"
                 >
-                  <span x-show="!isLoading">Generate</span>
-                  <span x-show="isLoading">Generating...</span>
+                  <span x-show="!isLoading">Generate Premium Photos</span>
+                  <span x-show="isLoading" class="flex items-center gap-2">
+                    <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Generating...
+                  </span>
                 </button>
 
                 <button
                   type="button"
-                  class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-900"
+                  class="rounded-xl border border-slate-300 px-6 py-3 text-base font-semibold text-slate-700 hover:bg-slate-100 transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700"
                   @click="clearOutput()"
                   :disabled="isLoading"
                 >
-                  Clear
+                  Clear Results
                 </button>
               </div>
 
-              <div x-show="isLoading || outputs.length > 0" class="grid gap-2">
-                <div class="text-sm font-medium">Results</div>
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <!-- Results Area -->
+              <div x-show="isLoading || outputs.length > 0 || error" class="grid gap-4">
+                <div class="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">Generated Results</div>
+                
+                <!-- Error Message Display -->
+                <div
+                  x-show="error"
+                  x-cloak
+                  class="rounded-xl border-2 border-red-500 bg-red-50 p-4 text-sm font-medium text-red-900 shadow-md dark:border-red-700 dark:bg-red-950/40 dark:text-red-200"
+                >
+                  <p class="font-bold mb-1">Generation Error:</p>
+                  <div x-text="error"></div>
+                </div>
+
+                <!-- Output Grid -->
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                   <template x-for="item in outputs" :key="item.id">
-                    <div class="flex aspect-square items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-2 dark:border-slate-800 dark:bg-slate-900">
-                      <template x-if="item.isLoading">
-                        <div class="text-center text-xs text-slate-500 dark:text-slate-400">Generating...</div>
-                      </template>
-                      <template x-if="!item.isLoading && item.imageUrl">
-                        <img :src="item.imageUrl" class="h-full w-full object-contain" alt="Result" />
-                      </template>
-                      <template x-if="!item.isLoading && !item.imageUrl">
-                        <div class="p-2 text-center text-xs text-red-600" x-text="item.error || 'Failed to generate.'"></div>
-                      </template>
+                    <div class="grid gap-2">
+                      <div class="text-sm font-semibold text-slate-700 dark:text-slate-300" x-text="item.title"></div>
+                      <div class="flex aspect-square min-h-[250px] items-center justify-center overflow-hidden rounded-xl border-2 border-slate-200 bg-slate-100 shadow-lg dark:border-slate-700 dark:bg-slate-950/50">
+                        <template x-if="item.isLoading">
+                          <div class="flex flex-col items-center justify-center text-center text-sm text-indigo-500 dark:text-indigo-400 p-4">
+                            <svg class="animate-spin h-8 w-8 text-indigo-500 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 0012 20c3.042 0 5.824-1.135 7.938-3l-2.647-3C15.824 13.135 14.042 12 12 12V4"></path>
+                            </svg>
+                            <p>Generating Image...</p>
+                          </div>
+                        </template>
+                        <template x-if="!item.isLoading && item.imageUrl">
+                          <img :src="item.imageUrl" class="h-full w-full object-contain p-2" :alt="'Generated ' + item.title" />
+                        </template>
+                        <template x-if="!item.isLoading && !item.imageUrl">
+                          <div class="p-4 text-center text-xs text-red-600 dark:text-red-300 font-medium">
+                            <p class="mb-1 font-bold">Failed to generate image for this theme.</p>
+                            <span x-text="item.error || 'Unknown failure.'"></span>
+                          </div>
+                        </template>
+                      </div>
                     </div>
                   </template>
                 </div>
               </div>
 
-              <div
-                x-show="error"
-                class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900/40 dark:bg-red-950/40 dark:text-red-200"
-              >
-                <div x-text="error"></div>
-              </div>
             </div>
           </section>
         </div>
