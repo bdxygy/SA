@@ -5,12 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SoloApp - Studio Generator</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
     <script>
       function imageStudioApp() {
         return {
           apiKey: '',
           showKey: false,
-          model: 'gemini-2.5-flash-preview-05-20',
+          model: 'gemini-2.5-flash-image',
+          aspectRatio: '1:1',
           systemPrompt:
             'You are a professional product photographer and retoucher. Transform the uploaded image into a premium studio product photo. Use a clean studio setup, soft diffused lighting, realistic shadows, high detail, accurate colors. Keep the same product and proportions. Center the product. Remove clutter. No text, no watermark. Output a photorealistic product photography result.',
           userPrompt: 'Make it look like a studio product photo.',
@@ -23,20 +25,40 @@
           rawResponse: null,
 
           init() {
-            try {
-              const savedKey = localStorage.getItem('gemini_api_key');
-              if (savedKey) this.apiKey = savedKey;
-            } catch {
-              this.apiKey = this.apiKey;
-            }
+            return;
           },
 
-          saveApiKey() {
-            try {
-              localStorage.setItem('gemini_api_key', this.apiKey || '');
-            } catch {
-              return;
+          async callGemini({ model, payload }) {
+            if (!this.apiKey) {
+              throw new Error('Missing API key.');
             }
+
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+              this.apiKey,
+            )}`;
+
+            const response = await fetch(apiUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(payload),
+            });
+
+            let data;
+            try {
+              data = await response.json();
+            } catch {
+              const text = await response.text();
+              throw new Error(text || `HTTP error! status: ${response.status}`);
+            }
+
+            if (!response.ok) {
+              const message = data?.error?.message || `HTTP error! status: ${response.status}`;
+              throw new Error(message);
+            }
+
+            return data;
           },
 
           toggleShowKey() {
@@ -95,8 +117,6 @@
             this.isLoading = true;
 
             try {
-              const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
-
               const payload = {
                 contents: [
                   {
@@ -114,23 +134,16 @@
                 systemInstruction: {
                   parts: [{ text: this.systemPrompt }],
                 },
+                generationConfig: {
+                  responseModalities: ['IMAGE'],
+                  imageConfig: {
+                    aspectRatio: this.aspectRatio,
+                  },
+                },
               };
 
-              const response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(payload),
-              });
-
-              const data = await response.json();
+              const data = await this.callGemini({ model: this.model, payload });
               this.rawResponse = data;
-
-              if (!response.ok) {
-                const message = data?.error?.message || `HTTP error! status: ${response.status}`;
-                throw new Error(message);
-              }
 
               const parts = data?.candidates?.[0]?.content?.parts || [];
               const inlinePart = parts.find((p) => p?.inlineData?.data && p?.inlineData?.mimeType);
@@ -185,7 +198,6 @@
               placeholder="Paste your API key"
               :type="showKey ? 'text' : 'password'"
               x-model.trim="apiKey"
-              @input="saveApiKey()"
               autocomplete="off"
               spellcheck="false"
             />
@@ -196,16 +208,33 @@
               x-text="showKey ? 'Hide' : 'Show'"
             ></button>
           </div>
+          <div class="text-xs text-slate-500 dark:text-slate-400">
+            API key is kept in memory (not stored).
+          </div>
         </div>
 
         <div class="grid gap-2">
           <label class="text-sm font-medium">Model</label>
           <input
             class="rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
-            placeholder="e.g. gemini-2.5-flash-preview-05-20"
+            placeholder="e.g. gemini-2.5-flash-image or gemini-3-pro-image-preview"
             x-model.trim="model"
             spellcheck="false"
           />
+        </div>
+
+        <div class="grid gap-2">
+          <label class="text-sm font-medium">Aspect ratio</label>
+          <select
+            class="rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:focus:border-slate-500 dark:focus:ring-slate-800"
+            x-model="aspectRatio"
+          >
+            <option value="1:1">1:1</option>
+            <option value="4:5">4:5</option>
+            <option value="3:4">3:4</option>
+            <option value="16:9">16:9</option>
+            <option value="9:16">9:16</option>
+          </select>
         </div>
 
         <div class="grid gap-2">
