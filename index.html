@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SoloApp</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body class="min-h-screen bg-white text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      function App() {
+        const [count, setCount] = React.useState(0);
+        const [name, setName] = React.useState('');
+
+        const displayName = React.useMemo(() => {
+          const trimmed = _.trim(name);
+          return trimmed ? _.startCase(trimmed) : 'Anonymous';
+        }, [name]);
+
+        return (
+          <main className="mx-auto mt-12 max-w-2xl rounded-xl border border-slate-200 p-6 shadow-sm dark:border-slate-800">
+            <h1 className="text-2xl font-semibold tracking-tight">SoloApp (React)</h1>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              Edit{' '}
+              <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[0.875em] dark:bg-slate-900">
+                index.html
+              </code>{' '}
+              and start building.
+            </p>
+
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-slate-50 active:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-900 dark:active:bg-slate-800"
+                onClick={() => setCount((c) => c + 1)}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-slate-50 active:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-900 dark:active:bg-slate-800"
+                onClick={() => setCount((c) => c - 1)}
+              >
+                -
+              </button>
+              <span className="text-sm">
+                Count: <strong className="font-semibold">{count}</strong>
+              </span>
+            </div>
+
+            <hr className="my-6 border-slate-200 dark:border-slate-800" />
+
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                type="text"
+                className="w-64 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-0 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:placeholder:text-slate-500 dark:focus:border-slate-500 dark:focus:ring-slate-800"
+                placeholder="Your name"
+                value={name}
+                onChange={(ev) => setName(ev.target.value)}
+                aria-label="Your name"
+              />
+              <span className="text-sm">
+                Hello, <strong className="font-semibold">{displayName}</strong>
+              </span>
+            </div>
+          </main>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+  </body>
+</html>
